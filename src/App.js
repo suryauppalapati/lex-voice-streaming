@@ -49,7 +49,7 @@ function App() {
       <button onClick={stopRecording} disabled={!isRecording}>
         Stop Recording
       </button>
-      {/* {audioURL && <audio src={audioURL} controls />} */}
+      {audioURL && <audio src={audioURL} controls />}
     </div>
   );
 }
