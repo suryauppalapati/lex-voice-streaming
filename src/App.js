@@ -1,45 +1,98 @@
-import useAudioRecorder from "./useAudioRecorder";
+import React, { useState, useEffect } from "react";
 import * as AWS from "aws-sdk";
-import { LexRuntimeServiceClient, PostContentCommand } from "@aws-sdk/client-lex-runtime-service";
+import { exportBuffer } from "./utils/audio";
 
-function App() {
-  AWS.config.credentials = new AWS.CognitoIdentityCredentials({
-    IdentityPoolId: "us-east-1:dbc51cf3-6927-4e0f-a569-0f054362d329",
-  });
-  AWS.config.region = "us-east-1";
+const App = () => {
+  const [audioURL, setAudioURL] = useState("");
+  const [isRecording, setIsRecording] = useState(false);
+  const [mediaRecorder, setMediaRecorder] = useState(null);
 
-  const lexConfig = {
-    apiVersion: "2016-11-28",
-    region: AWS.config.region,
+  function postToLex(arrayBuffer) {
+    AWS.config.update({
+      region: "us-east-1",
+      credentials: new AWS.CognitoIdentityCredentials({
+        IdentityPoolId: "us-east-1:dbc51cf3-6927-4e0f-a569-0f054362d329",
+      }),
+    });
+
+    var lexruntime = new AWS.LexRuntime();
+
+    // Example usage of lexruntime to post content
+    var params = {
+      botAlias: "$LATEST",
+      botName: "BookTrip",
+      contentType: "audio/x-l16; sample-rate=16000",
+      userId: "testing",
+      accept: "audio/mpeg",
+      inputStream: arrayBuffer,
+    };
+
+    lexruntime.postContent(params, function (err, data) {
+      if (err) console.log(err, err.stack); // an error occurred
+      else {
+        const lexAudioStream = data.audioStream;
+        const responseBlob = new Blob([lexAudioStream], { type: "audio/mpeg" });
+        const objectUrl = window.URL.createObjectURL(responseBlob);
+        setAudioURL(objectUrl);
+      }
+    });
+  }
+
+  useEffect(() => {
+    const getMicrophonePermissions = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const recorder = new MediaRecorder(stream);
+        let audioChunks = [];
+
+        recorder.ondataavailable = (event) => {
+          audioChunks.push(event.data);
+        };
+
+        recorder.onstop = async () => {
+          try {
+            const audioBlob = new Blob(audioChunks, { type: "audio/wav" });
+            const audioUrl = URL.createObjectURL(audioBlob);
+            const buffer = await audioBlob.arrayBuffer();
+            console.log("RAW BUFFER :::: ", buffer);
+            const encodedBuffer = exportBuffer(buffer);
+            console.log("ENCODED WAV :::: ", encodedBuffer);
+            postToLex(encodedBuffer);
+            // setAudioURL(audioUrl);
+            audioChunks = [];
+          } catch (error) {
+            console.error("Error while converting blob to buffer", error);
+          }
+        };
+
+        setMediaRecorder(recorder);
+      } catch (err) {
+        console.error("Error accessing the microphone", err);
+      }
+    };
+
+    getMicrophonePermissions();
+
+    // Cleanup function to stop the media stream
+    return () => {
+      mediaRecorder?.stream.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
+
+  const startRecording = () => {
+    setAudioURL(null);
+    if (mediaRecorder) {
+      mediaRecorder.start();
+      setIsRecording(true);
+    }
   };
 
-  const input = {
-    // PostContentRequest
-    botName: "BookTrip", // required
-    botAlias: "production", // required
-    userId: "userId", // required
-    contentType: "audio/l16; rate=16000; channels=1", // required
-    accept: "audio/pcm",
-    inputStream: "MULTIPLE_TYPES_ACCEPTED", // see \@smithy/types -> StreamingBlobPayloadInputTypes // required
+  const stopRecording = () => {
+    if (mediaRecorder) {
+      mediaRecorder.stop();
+      setIsRecording(false);
+    }
   };
-
-  const lexClient = new LexRuntimeServiceClient(lexConfig);
-
-  const handleAudioData = async (data) => {
-    console.log("Streaming data:", data);
-    const command = new PostContentCommand(input);
-    const response = await client.send(command);
-    console.log("response");
-  };
-
-  const handleError = (error) => {
-    console.error("Error from recorder:", error);
-  };
-
-  const { isRecording, startRecording, stopRecording } = useAudioRecorder({
-    onAudioData: handleAudioData,
-    onError: handleError,
-  });
 
   return (
     <div>
@@ -52,6 +105,6 @@ function App() {
       {audioURL && <audio src={audioURL} controls />}
     </div>
   );
-}
+};
 
 export default App;
