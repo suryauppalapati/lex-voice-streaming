@@ -1,12 +1,15 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import * as AWS from "aws-sdk";
-import { exportBuffer } from "./utils/audio";
+import { exportBuffer, convertToFloat32Array } from "./utils/audio";
 
 const App = () => {
   const [audioURL, setAudioURL] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [mediaRecorder, setMediaRecorder] = useState(null);
+  const [dialogState, setDialogState] = useState(null);
+  const audioRef = useRef(null); // Ref to attach to the audio element for direct DOM manipulation (audio-tag)
 
+  // Function to send recorded audio to AWS Lex and handle the response
   function postToLex(arrayBuffer) {
     AWS.config.update({
       region: "us-east-1",
@@ -16,8 +19,6 @@ const App = () => {
     });
 
     var lexruntime = new AWS.LexRuntime();
-
-    // Example usage of lexruntime to post content
     var params = {
       botAlias: "$LATEST",
       botName: "BookTrip",
@@ -27,17 +28,21 @@ const App = () => {
       inputStream: arrayBuffer,
     };
 
+    // Post audio content to Lex and process the response
     lexruntime.postContent(params, function (err, data) {
-      if (err) console.log(err, err.stack); // an error occurred
+      if (err) console.log(err, err.stack);
       else {
+        console.log("Lex Response:::", data);
         const lexAudioStream = data.audioStream;
         const responseBlob = new Blob([lexAudioStream], { type: "audio/mpeg" });
         const objectUrl = window.URL.createObjectURL(responseBlob);
+        setDialogState(data.dialogState);
         setAudioURL(objectUrl);
       }
     });
   }
 
+  // Effect to obtain microphone permissions and set up the media recorder
   useEffect(() => {
     const getMicrophonePermissions = async () => {
       try {
@@ -50,19 +55,12 @@ const App = () => {
         };
 
         recorder.onstop = async () => {
-          try {
-            const audioBlob = new Blob(audioChunks, { type: "audio/wav" });
-            const audioUrl = URL.createObjectURL(audioBlob);
-            const buffer = await audioBlob.arrayBuffer();
-            console.log("RAW BUFFER :::: ", buffer);
-            const encodedBuffer = exportBuffer(buffer);
-            console.log("ENCODED WAV :::: ", encodedBuffer);
-            postToLex(encodedBuffer);
-            // setAudioURL(audioUrl);
-            audioChunks = [];
-          } catch (error) {
-            console.error("Error while converting blob to buffer", error);
-          }
+          const audioBlob = new Blob(audioChunks, { type: "audio/wav" });
+          const buffer = await audioBlob.arrayBuffer();
+          const float32Buffer = convertToFloat32Array(buffer);
+          const encodedBuffer = exportBuffer(float32Buffer.buffer);
+          postToLex(encodedBuffer);
+          audioChunks = [];
         };
 
         setMediaRecorder(recorder);
@@ -73,20 +71,55 @@ const App = () => {
 
     getMicrophonePermissions();
 
-    // Cleanup function to stop the media stream
     return () => {
+      // Clean up: stop any media tracks when the component unmounts
       mediaRecorder?.stream.getTracks().forEach((track) => track.stop());
     };
   }, []);
 
+  // Effect to handle automatic playback and starting new recording once playback finishes
+  useEffect(() => {
+    const audioEl = audioRef.current;
+    if (audioEl) {
+      audioEl.onended = () => {
+        console.log("Audio playback finished, starting new recording...");
+        startRecording();
+      };
+
+      // Trigger play if autoplay fails due to browser incompatiability
+      if (audioURL) {
+        audioEl.play().catch((error) => {
+          console.error("Playback failed:", error);
+        });
+      }
+    }
+
+    return () => {
+      // Clean up: remove the event listener when the component re-renders or unmounts
+      if (audioEl) {
+        audioEl.onended = null;
+      }
+    };
+  }, [audioURL]);
+
+  // Start recording audio
   const startRecording = () => {
     setAudioURL(null);
-    if (mediaRecorder) {
+    setDialogState(null);
+    if (mediaRecorder && dialogState !== "Failed") {
       mediaRecorder.start();
       setIsRecording(true);
+
+      //Three seconds window for user to interact with bot
+      setTimeout(() => {
+        console.log("Stopping recording");
+        stopRecording();
+        setIsRecording(false);
+      }, 3000);
     }
   };
 
+  // Stop recording audio
   const stopRecording = () => {
     if (mediaRecorder) {
       mediaRecorder.stop();
@@ -94,15 +127,19 @@ const App = () => {
     }
   };
 
+  // Render the component UI
   return (
-    <div>
-      <button onClick={startRecording} disabled={isRecording}>
-        Start Recording
-      </button>
-      <button onClick={stopRecording} disabled={!isRecording}>
-        Stop Recording
-      </button>
-      {audioURL && <audio src={audioURL} controls />}
+    <div style={{ margin: "auto", padding: "20%" }}>
+      <div style={{ display: "flex", columnGap: "1rem" }}>
+        <button onClick={startRecording} disabled={isRecording}>
+          Start Recording
+        </button>
+        <button onClick={stopRecording} disabled={!isRecording}>
+          Stop Recording
+        </button>
+      </div>
+      <br />
+      {audioURL && <audio ref={audioRef} src={audioURL} controls autoPlay />}
     </div>
   );
 };

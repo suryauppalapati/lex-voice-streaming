@@ -33,14 +33,15 @@ var recordSampleRate = 44100;
  * Returns the encoded audio as a Blob.
  */
 export function exportBuffer(recBuffer) {
-  console.log("Input buffer length:", recBuffer.byteLength); // Check buffer size
-  const downsampledBuffer = downsampleBuffer(recBuffer, 16000);
-  console.log("Downsampled buffer:", downsampledBuffer); // Check downsampled data
+  console.log("Input buffer byte length:", recBuffer.byteLength); // Ensure it's defined and is a number
+  const buffer = new Float32Array(recBuffer); // Convert ArrayBuffer to Float32Array
+  console.log("Buffer length (as Float32Array):", buffer.length);
+  const downsampledBuffer = downsampleBuffer(buffer, 16000);
   const encodedWav = encodeWAV(downsampledBuffer);
   const audioBlob = new Blob([encodedWav], {
     type: "application/octet-stream",
   });
-  console.log("Audio blob size:", audioBlob.size); // Should be more than 44 if data is included
+  console.log("Audio blob size:", audioBlob.size);
   return audioBlob;
 }
 
@@ -48,6 +49,11 @@ export function exportBuffer(recBuffer) {
  * Samples the buffer at 16 kHz.
  */
 function downsampleBuffer(buffer, exportSampleRate) {
+  if (!recordSampleRate || !exportSampleRate) {
+    console.error("Sample rates not defined:", { recordSampleRate, exportSampleRate });
+    return new Float32Array(); // Return an empty array
+  }
+
   const sampleRateRatio = recordSampleRate / exportSampleRate;
   const newLength = Math.round(buffer.length / sampleRateRatio);
   const result = new Float32Array(newLength);
@@ -59,19 +65,18 @@ function downsampleBuffer(buffer, exportSampleRate) {
     const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio);
     let accum = 0;
     let count = 0;
-    for (var i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+    for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
       accum += buffer[i];
       count++;
     }
-    if (count > 0) {
-      result[offsetResult] = accum / count; // Ensure that we actually add data
-    }
+    result[offsetResult] = count > 0 ? accum / count : 0;
     offsetResult++;
     offsetBuffer = nextOffsetBuffer;
   }
-  console.log("New Length:", newLength);
-  console.log("Final Result Length:", result.length);
-  console.log("First few samples of downsampled buffer:", result.slice(0, 10));
+
+  //   console.log("New Length:", newLength);
+  //   console.log("Final Result Length:", result.length);
+  //   console.log("First few samples of downsampled buffer:", result.slice(0, 10));
   return result;
 }
 
@@ -80,6 +85,13 @@ function floatTo16BitPCM(output, offset, input) {
     const s = Math.max(-1, Math.min(1, input[i]));
     output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
   }
+}
+
+export function convertToFloat32Array(buffer) {
+  const byteLength = buffer.byteLength;
+  const alignedLength = byteLength - (byteLength % 4); // Adjust to nearest valid length
+  const alignedBuffer = buffer.slice(0, alignedLength); // Create a slice of the original buffer
+  return new Float32Array(alignedBuffer);
 }
 
 function writeString(view, offset, string) {
